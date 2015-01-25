@@ -2,26 +2,26 @@
 
 This is a libuv binding for Lua focused on programmer happy! This meant that I have simplified lots of libuv APIs to make it easy to use in Lua. For example, we can create a TCP server that sends "Hello World" to clients in just the following code.
 
-    -- Example 1
-    uv = require "xuv"
-    
-    uv.listen("127.0.0.1", 23333, 32, function(client)
-        client:write("Hello World!", function()
-		client:close()
+	-- Example 1
+	uv = require "xuv"
+
+	uv.listen("127.0.0.1", 23333, 32, function(client)
+		client:write("Hello World!", function()
+			client:close()
+		end)
 	end)
-    end
-    
-    uv.connect("127.0.0.1", 23333, function(self)
-	function self.on_close()
-	    print("She closed the connection!")
-	end
-        function self.on_data(chunk)
-	    print("GOT:", chunk)
-	end
-	self:read_start()
-    end)
-    
-    uv.run()
+
+	uv.connect("127.0.0.1", 23333, function(self)
+		function self.on_close()
+			print("She closed the connection!")
+		end
+		function self.on_data(chunk)
+			print("GOT:", chunk)
+		end
+		self:read_start()
+	end)
+
+	uv.run()
 
 So simple, right? It is also OK to use it with SDL in your games to talk with your server!
 
@@ -51,16 +51,16 @@ So simple, right? It is also OK to use it with SDL in your games to talk with yo
     
 Well, you ask me why I made the binding like this? Ruby inspired me. Let us have a look at the connect part of Example 1 again in Ruby:
 
-    -- part of Example 1, but in Ruby
-    uv.connect("127.0.0.1", 23333) do | self |
-	def self.on_close
-	    print("She closed the connection!")
+	-- part of Example 1, but in Ruby
+	uv.connect("127.0.0.1", 23333) do | self |
+		def self.on_close
+			print("She closed the connection!")
+		end
+		def self.on_data(chunk)
+			print("GOT:", chunk)
+		end
+		self.read_start
 	end
-        def self.on_data(chunk)
-	    print("GOT:", chunk)
-	end
-	self.read_start
-    end
 
 Yes, I translated the code into Ruby so easily because I took the ideas of Ruby's code blocks and instance methods. Ruby has lots of features for programmer happy!
 
@@ -70,18 +70,18 @@ The library is very easy-to-use but reading data from streams seems to be annoyi
 
 Reader is a middleware and also a design which tooks advantages of Lua co-routines and helps programmers extract structured data (which is more widely used in dynamic programming) from streams (a series of chars) with another design called decoders.
 
-    -- Example 3
-    uv.listen("0.0.0.0", 80, function(client)
-	Reader(client, function(reader)
-	    local request = reader:read "HTTP Request" -- HTTP Request is a decoder I'll provide with this project later
-	    if request.resource ## "/" then
-	        client.write "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello World!"
-	    else
-	        client.write "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nOops! Wrong way."
-	    end
-	    client.close() -- we didn't implement keep-alive connections. close the connection to notice that the document is over.
+	-- Example 3
+	uv.listen("0.0.0.0", 80, function(client)
+		Reader(client, function(reader)
+			local request = reader:read "HTTP Request" -- HTTP Request is a decoder I'll provide with this project later
+			if request.resource ## "/" then
+				client.write "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello World!"
+			else
+				client.write "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nOops! Wrong way."
+			end
+			client.close() -- we didn't implement keep-alive connections. close the connection to notice that the document is over.
+		end)
 	end)
-    end)
  
 ## Streams and Servers
 
