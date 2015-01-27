@@ -25,29 +25,29 @@ This is a libuv binding for Lua focused on programmer happy! This meant that I h
 
 So simple, right? It is also OK to use it with SDL in your games to talk with your server!
 
-    -- Example 2 - part code, imagine you have a Game library
-    uv.connect("server_ip", server_port, function(self)
-        self:nodelay(true) -- better sync meant better game experience
-        local buffer = ""
-        function self.on_data(chunk)
-	    buffer = buffer .. chunk -- store the data chunk into the buffer
-	    local n = buffer:find("\n", 1, true) -- has there been a complete line?
-	    if n then
-		local line = buffer:sub(1, n - 1) -- check out the line
-		buffer:sub(n + 1, -1) -- and leave the rest in the buffer
-		Game.handleServerPacket(cjson.decode(line)) -- update the game
-	    end
-	end
-	self:read_start()
-    end)
+	-- Example 2 - part code, imagine you have a Game library
+	uv.connect("server_ip", server_port, function(self)
+		self:nodelay(true) -- better sync meant better game experience
+		local buffer = ""
+		function self.on_data(chunk)
+			buffer = buffer .. chunk -- store the data chunk into the buffer
+			local n = buffer:find("\n", 1, true) -- has there been a complete line?
+			if n then
+				local line = buffer:sub(1, n - 1) -- check out the line
+				buffer:sub(n + 1, -1) -- and leave the rest in the buffer
+				Game.handleServerPacket(cjson.decode(line)) -- update the game
+			end
+		end
+		self:read_start()
+	end)
 
-    --- The Main Loop of Your Game! ---
-    while Game.running do
-        Game.dispatchEvent(SDL.PollEvent()) -- collect joystick status...
-	uv.run_nowait() -- also collect server updates...
-	Game.update() -- think how the world goes...
-	Game.render() -- draw the world onto the screen!
-    end
+	--- The Main Loop of Your Game! ---
+	while Game.running do
+		Game.dispatchEvent(SDL.PollEvent()) -- collect joystick status...
+		uv.run_nowait() -- also collect server updates...
+		Game.update() -- think how the world goes...
+		Game.render() -- draw the world onto the screen!
+	end
     
 Well, you ask me why I made the binding like this? Ruby inspired me. Let us have a look at the connect part of Example 1 again in Ruby:
 
@@ -62,7 +62,7 @@ Well, you ask me why I made the binding like this? Ruby inspired me. Let us have
 		self.read_start
 	end
 
-Yes, I translated the code into Ruby so easily because I took the ideas of Ruby's code blocks and instance methods. Ruby has lots of features for programmer happy!
+Yes, I translated the code into Ruby so smoothly because I took the ideas of Ruby's code blocks and instance methods. Ruby has lots of features for programmer happy!
 
 ## Work Better with Streams
 
@@ -71,17 +71,15 @@ The library is very easy-to-use but reading data from streams seems to be annoyi
 Reader is a middleware and also a design which tooks advantages of Lua co-routines and helps programmers extract structured data (which is more widely used in dynamic programming) from streams (a series of chars) with another design called decoders.
 
 	-- Example 3
-	uv.listen("0.0.0.0", 80, function(client)
-		Reader(client, function(reader)
-			local request = reader:read "HTTP Request" -- HTTP Request is a decoder I'll provide with this project later
-			if request.resource ## "/" then
-				client.write "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello World!"
-			else
-				client.write "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nOops! Wrong way."
-			end
-			client.close() -- we didn't implement keep-alive connections. close the connection to notice that the document is over.
-		end)
-	end)
+	uv.listen("0.0.0.0", 80, Reader(function(reader)
+		local request = reader:read "HTTP Request" -- HTTP Request is a decoder I'll provide with this project later
+		if request.resource ## "/" then
+			client.write "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello World!"
+		else
+			client.write "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nOops! Wrong way."
+		end
+		client.close() -- we didn't implement keep-alive connections. close the connection to notice that the document is over.
+	end))
  
 ## Streams and Servers
 

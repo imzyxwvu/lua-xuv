@@ -28,7 +28,7 @@ typedef struct {
 } luaxuv_server;
 
 typedef struct {
-	int l_ref;
+	int l_ref, data_ref;
 	luaxuv_stream *self;
 } luaxuv_callback;
 
@@ -37,7 +37,7 @@ typedef struct {
 #define LXUV_MT_SERVER "UV: Server"
 #define LXUV_MT_HANDLE "UV: Handle"
 #define LXUV_FLAG_USABLE  0x1
-#define LXUV_FLAG_READING 0x1
+#define LXUV_FLAG_READING 0x2
 #define LXUV_LUA_UNREF(v) if(v != LUA_REFNIL) { \
 	luaL_unref(L, LUA_REGISTRYINDEX, v); \
 	v = LUA_REFNIL; \
@@ -120,7 +120,7 @@ static int l_stream_set_on_data(lua_State *L)
 	if(self->cb_data != LUA_REFNIL)
 		luaL_unref(L, LUA_REGISTRYINDEX, self->cb_data);
 	if(lua_isnoneornil(L, 2))
-		self->cb_close = LUA_REFNIL;
+		self->cb_data = LUA_REFNIL;
 	else {
 		luaL_checktype(L, 2, LUA_TFUNCTION);
 		lua_pushvalue(L, 2);
@@ -132,16 +132,16 @@ static int l_stream_set_on_data(lua_State *L)
 static int l_stream_set_on_close(lua_State *L)
 {
 	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
-	if(NULL == self->handle)
-		return luaL_error(L, "handle has been closed");
-	if(self->cb_close != LUA_REFNIL)
-		luaL_unref(L, LUA_REGISTRYINDEX, self->cb_close);
-	if(lua_isnoneornil(L, 2))
-		self->cb_close = LUA_REFNIL;
-	else {
-		luaL_checktype(L, 2, LUA_TFUNCTION);
-		lua_pushvalue(L, 2);
-		self->cb_close = luaL_ref(L, LUA_REGISTRYINDEX);
+	if(self->handle) {
+		if(self->cb_close != LUA_REFNIL)
+			luaL_unref(L, LUA_REGISTRYINDEX, self->cb_close);
+		if(lua_isnoneornil(L, 2))
+			self->cb_close = LUA_REFNIL;
+		else {
+			luaL_checktype(L, 2, LUA_TFUNCTION);
+			lua_pushvalue(L, 2);
+			self->cb_close = luaL_ref(L, LUA_REGISTRYINDEX);
+		}
 	}
 	return 0;
 }
@@ -152,6 +152,7 @@ static void luaxuv_on_shutdown(uv_shutdown_t* req, int status)
 	lua_State *L = L_Main;
 	uv_close((uv_handle_t *)req->handle, (uv_close_cb)free);
 	free(req);
+	LXUV_LUA_UNREF(self->ref_self);
 	LXUV_LUA_UNREF(self->cb_data);
 	if(self->cb_close != LUA_REFNIL) {
 		lua_rawgeti(L, LUA_REGISTRYINDEX, self->cb_close);
@@ -178,8 +179,8 @@ static int l_stream_close(lua_State *L)
 			directly_closing = 0; // defer removing callbacks
 		} else uv_close(self->handle, (uv_close_cb)free);
 		self->handle = NULL; self->flags = 0;
-		LXUV_LUA_UNREF(self->ref_self);
 		if(directly_closing) {
+			LXUV_LUA_UNREF(self->ref_self);
 			LXUV_LUA_UNREF(self->cb_data);
 			if(self->cb_close != LUA_REFNIL) {
 				int has_no_arg = lua_isnoneornil(L, 2);
@@ -198,12 +199,23 @@ static int l_stream_close(lua_State *L)
 	return 0;
 }
 
+static int l_stream_alive(lua_State *L)
+{
+	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
+	if(self->handle && (self->flags & LXUV_FLAG_USABLE)) {
+		lua_pushvalue(L, 1);
+	} else {
+		lua_pushboolean(L, 0);
+	}
+	return 1;
+}
+
 static int l_stream__gc(lua_State *L)
 {
 	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
 	if(self->handle) {
 		uv_close(self->handle, (uv_close_cb)free);
-		fprintf(stderr, "xuv: forgot to close stream 0x%X\n", self->handle);
+		fprintf(stderr, "xuv: forgot to close stream 0x%X\n", (unsigned int)self->handle);
 		self->handle = NULL;
 	}
 	return 0;
@@ -323,10 +335,10 @@ static int l_stream_read_stop(lua_State *L)
 {
 	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
 	int r;
+	if(!(self->flags & LXUV_FLAG_READING && self->flags & LXUV_FLAG_USABLE))
+		return 0; // this stream is not being readed or being closed ...
 	if(NULL == self->handle)
 		return luaL_error(L, "attempt to operate on a closed stream");
-	if(!(self->flags & LXUV_FLAG_USABLE))
-		return luaL_error(L, "stream is not open");
 	r = uv_read_stop((uv_stream_t *)self->handle);
 	if(r < 0) {
 		lua_pushstring(L, uv_strerror(r));
@@ -345,6 +357,7 @@ static int l_stream_getsockname(lua_State *L)
 		return luaL_error(L, "attempt to operate on a closed stream");
 	if(UV_TCP != self->handle->type)
 		return luaL_error(L, "stream is not a TCP stream");
+	addrlen = sizeof(address);
 	r = uv_tcp_getsockname(
 		(uv_tcp_t *)self->handle,
 		(struct sockaddr*)&address, &addrlen);
@@ -365,6 +378,7 @@ static int l_stream_getpeername(lua_State *L)
 		return luaL_error(L, "attempt to operate on a closed stream");
 	if(UV_TCP != self->handle->type)
 		return luaL_error(L, "stream is not a TCP stream");
+	addrlen = sizeof(address);
 	r = uv_tcp_getpeername(
 		(uv_tcp_t *)self->handle,
 		(struct sockaddr*)&address, &addrlen);
@@ -1077,7 +1091,7 @@ static luaL_Reg lreg_main[] = {
 	{ "kill", luaxuv_kill },
 	{ "uptime", luaxuv_uptime },
 	{ "hrtime", luaxuv_hrtime },
-	{ "update_time", luaxuv_uptime },
+	{ "update_time", luaxuv_update_time },
 	{ "cpu_info", luaxuv_cpu_info },
 	{ "version_string", luaxuv_version_string },
 	{ "get_total_memory", luaxuv_get_total_memory },
@@ -1119,6 +1133,8 @@ LUA_API int luaopen_xuv(lua_State *L)
 	lua_setfield(L, -2, "__index");
 	lua_pushcfunction(L, l_stream__gc);
 	lua_setfield(L, -2, "__gc");
+	lua_pushcfunction(L, l_stream_alive);
+	lua_setfield(L, -2, "__call");
 	
 	luaL_newmetatable(L, LXUV_MT_SERVER);
 	lua_newtable(L);
