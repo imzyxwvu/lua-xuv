@@ -23,7 +23,7 @@ This is a libuv binding for Lua focused on programmer happy! This meant that I h
 
 	uv.run()
 
-So simple, right? It is also OK to use it with SDL in your games to talk with your server!
+It is also OK to use it with SDL in your games to talk with your server:
 
 	-- Example 2 - part code, imagine you have a Game library
 	uv.connect("server_ip", server_port, function(self)
@@ -117,9 +117,9 @@ Close the stream. It will shutdown the stream at first if needed. The on_close c
 
 ### stream.on_data(chunk)
 
-Will be called when there is data available. (And won't be called if there is an error. To catch the error, use the on_close callback.
+Will be called when there is data available. And won't be called if there is an error. To catch the error, use the on_close callback.
 
-This callback will be called even after stream:close() if stream:close() does shutdown.
+This callback might be called after stream:close() if stream:close() does shutdown.
 
 ### stream.on_close([note])
 

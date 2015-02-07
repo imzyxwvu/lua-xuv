@@ -28,6 +28,11 @@ typedef struct {
 } luaxuv_server;
 
 typedef struct {
+	uv_poll_t *handle;
+	int cb_tick, ref_self;
+} luaxuv_poll;
+
+typedef struct {
 	int l_ref, data_ref;
 	luaxuv_stream *self;
 } luaxuv_callback;
@@ -35,6 +40,7 @@ typedef struct {
 #define LXUV_MT_LOOP   "UV: Loop"
 #define LXUV_MT_STREAM "UV: Stream"
 #define LXUV_MT_SERVER "UV: Server"
+#define LXUV_MT_POLL "UV: Poll"
 #define LXUV_MT_HANDLE "UV: Handle"
 #define LXUV_FLAG_USABLE  0x1
 #define LXUV_FLAG_READING 0x2
@@ -42,6 +48,7 @@ typedef struct {
 	luaL_unref(L, LUA_REGISTRYINDEX, v); \
 	v = LUA_REFNIL; \
 }
+#define LXUV_DEBUG(s) puts("lua-xuv: [DEBUG] " s)
 
 static void luaxuv_pushaddr(lua_State* L, struct sockaddr_storage* address, int addrlen)
 {
@@ -111,8 +118,7 @@ static int l_stream__newindex(lua_State *L)
 static int l_stream_set_on_data(lua_State *L)
 {
 	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
-	if(NULL == self->handle)
-		return luaL_error(L, "handle has been closed");
+	if(NULL == self->handle) return 0;
 	if(self->flags & LXUV_FLAG_READING) {
 		if(lua_isnoneornil(L, 2))
 			return luaL_error(L, "reading handles must have a callback");
@@ -215,7 +221,7 @@ static int l_stream__gc(lua_State *L)
 	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
 	if(self->handle) {
 		uv_close(self->handle, (uv_close_cb)free);
-		fprintf(stderr, "xuv: forgot to close stream 0x%X\n", (unsigned int)self->handle);
+		fprintf(stderr, "lua-xuv: forgot to close stream 0x%X\n", (unsigned int)self->handle);
 		self->handle = NULL;
 	}
 	return 0;
@@ -236,6 +242,7 @@ static void luaxuv_on_write(uv_write_t *req, int status)
 			lua_call(L_Main, 0, 0);
 		} else {
 			self->flags &= ~LXUV_FLAG_USABLE;
+			LXUV_DEBUG("write failed!");
 			// self:close(err)
 			lua_pushcfunction(L_Main, l_stream_close);
 			lua_rawgeti(L_Main, LUA_REGISTRYINDEX, self->ref_self);
@@ -278,10 +285,16 @@ static int l_stream_write(lua_State *L)
 			free(cb);
 		}
 		free(req);
+		lua_pushcfunction(L_Main, l_stream_close);
+		lua_pushvalue(L, 1);
+		lua_pushstring(L_Main, uv_err_name(r));
+		lua_call(L_Main, 2, 0);
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
-	return 0;
+	lua_pushvalue(L, 1);
+	return 1;
 }
 
 static void luaxuv_on_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
@@ -324,11 +337,17 @@ static int l_stream_read_start(lua_State *L)
 		return luaL_error(L, "first of all set a callback");
 	r = uv_read_start((uv_stream_t *)self->handle, luaxuv_on_alloc, luaxuv_on_data);
 	if(r < 0) {
+		lua_pushcfunction(L_Main, l_stream_close);
+		lua_pushvalue(L, 1);
+		lua_pushstring(L_Main, uv_err_name(r));
+		lua_call(L_Main, 2, 0);
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
 	self->flags |= LXUV_FLAG_READING;
-	return 0;
+	lua_pushvalue(L, 1);
+	return 1;
 }
 
 static int l_stream_read_stop(lua_State *L)
@@ -341,11 +360,17 @@ static int l_stream_read_stop(lua_State *L)
 		return luaL_error(L, "attempt to operate on a closed stream");
 	r = uv_read_stop((uv_stream_t *)self->handle);
 	if(r < 0) {
+		lua_pushcfunction(L_Main, l_stream_close);
+		lua_pushvalue(L, 1);
+		lua_pushstring(L_Main, uv_err_name(r));
+		lua_call(L_Main, 2, 0);
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
 	self->flags &= ~LXUV_FLAG_READING;
-	return 0;
+	lua_pushvalue(L, 1);
+	return 1;
 }
 
 static int l_stream_getsockname(lua_State *L)
@@ -401,10 +426,12 @@ static int l_stream_nodelay(lua_State *L)
 		return luaL_error(L, "stream is not a TCP stream");
 	r = uv_tcp_nodelay((uv_tcp_t *)self->handle, lua_toboolean(L, 2));
 	if(r < 0) {
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
-	return 0;
+	lua_pushvalue(L, 1);
+	return 1;
 }
 
 static void luaxuv_on_connect(uv_connect_t* req, int status)
@@ -1046,6 +1073,16 @@ static int luaxuv_set_process_title(lua_State* L) {
 	return 0;
 }
 
+static int luaxuv_chdir(lua_State* L) {
+	const char* dir = luaL_checkstring(L, 1);
+	register int r = uv_chdir(dir);
+	if(r < 0)  {
+		lua_pushstring(L, uv_strerror(r));
+		return lua_error(L);
+	}
+	return 0;
+}
+
 static int luaxuv_kill(lua_State* L) {
 	int pid = luaL_checkinteger(L, 1);
 	int signum = luaL_optinteger(L, 2, SIGTERM);
@@ -1088,6 +1125,7 @@ static luaL_Reg lreg_main[] = {
 	{ "timer_get_repeat", luaxuv_timer_get_repeat },
 	{ "timer_set_repeat", luaxuv_timer_set_repeat },
 	{ "close", luaxuv_close },
+	{ "chdir", luaxuv_chdir },
 	{ "kill", luaxuv_kill },
 	{ "uptime", luaxuv_uptime },
 	{ "hrtime", luaxuv_hrtime },
