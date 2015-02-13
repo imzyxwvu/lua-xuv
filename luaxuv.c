@@ -387,8 +387,9 @@ static int l_stream_getsockname(lua_State *L)
 		(uv_tcp_t *)self->handle,
 		(struct sockaddr*)&address, &addrlen);
 	if(r < 0) {
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
 	luaxuv_pushaddr(L, &address, addrlen);
 	return 2;
@@ -408,12 +409,50 @@ static int l_stream_getpeername(lua_State *L)
 		(uv_tcp_t *)self->handle,
 		(struct sockaddr*)&address, &addrlen);
 	if(r < 0) {
+		lua_pushnil(L);
 		lua_pushstring(L, uv_strerror(r));
-		return lua_error(L);
+		return 2;
 	}
 	luaxuv_pushaddr(L, &address, addrlen);
 	return 2;
 }
+
+#ifdef __linux__
+
+#include <linux/netfilter_ipv4.h>
+
+/*
+ * libuv doesn't provide this and this is used for my own purpose.
+ * This is useful for transparent proxying...
+ */
+
+static int l_stream_originaldst(lua_State *L)
+{
+	luaxuv_stream *self = luaL_checkudata(L, 1, LXUV_MT_STREAM);
+	int addrlen, r;
+	struct sockaddr_in6 address;
+	uv_os_fd_t fd;
+	if(NULL == self->handle)
+		return luaL_error(L, "attempt to operate on a closed stream");
+	if(UV_TCP != self->handle->type)
+		return luaL_error(L, "stream is not a TCP stream");
+	r = uv_fileno(self->handle, &fd);
+	if(r < 0) {
+		lua_pushnil(L);
+		lua_pushstring(L, uv_strerror(r));
+		return 2;
+	}
+	addrlen = sizeof(address);
+	if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST,
+		(struct sockaddr *)&address, &addrlen) != 0) {
+		lua_pushnil(L);
+		return 1;
+	}
+	luaxuv_pushaddr(L, (void*)&address, addrlen);
+	return 2;
+}
+
+#endif
 
 static int l_stream_nodelay(lua_State *L)
 {
@@ -542,6 +581,9 @@ static luaL_Reg lreg_stream_newindex[] = {
 static luaL_Reg lreg_stream_methods[] = {
 	{ "getsockname", l_stream_getsockname },
 	{ "getpeername", l_stream_getpeername },
+#ifdef __linux__
+	{ "originaldst", l_stream_originaldst },
+#endif
 	{ "nodelay", l_stream_nodelay },
 	{ "read_start", l_stream_read_start },
 	{ "read_stop", l_stream_read_stop },
